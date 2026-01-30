@@ -2,7 +2,9 @@
 
 > **本插件基于原有的企业微信插件重构，完整适配 OpenClaw 新的 Plugin SDK 接口**
 
-**原插件仓库**: https://github.com/zhiluop/wxchat
+**原插件仓库**: https://github.com/dee-lii/clawdbot-plugin-wecom
+
+> 感谢原作者 **dee-lii** 提供的优秀企业微信插件实现，本插件在其基础上进行了适配和扩展。
 
 本插件为 OpenClaw 提供企业微信消息渠道支持，支持文本、图片、视频、语音、文件等多种消息类型。
 
