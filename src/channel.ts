@@ -70,19 +70,20 @@ function cleanupExpiredCache(): void {
  */
 function isMessageProcessed(msgId: string, contentHash?: string): boolean {
   const now = Date.now();
+  const logger = getWeComLogger();
   
   // 清理过期缓存
   cleanupExpiredCache();
   
   // 第一层：MsgId 去重
   if (msgId && processedMsgIds.has(msgId)) {
-    console.log(`[WECOM DEDUP] 检测到重复消息 (MsgId): ${msgId}`);
+    logger.warn(`[去重] 检测到重复消息 (MsgId): ${msgId}`);
     return true;
   }
   
   // 第二层：内容哈希去重（防止 MsgId 不同但内容相同的重复）
   if (contentHash && processedContentHashes.has(contentHash)) {
-    console.log(`[WECOM DEDUP] 检测到重复消息 (ContentHash): ${contentHash}`);
+    logger.warn(`[去重] 检测到重复消息 (ContentHash): ${contentHash}`);
     return true;
   }
   
@@ -94,6 +95,7 @@ function isMessageProcessed(msgId: string, contentHash?: string): boolean {
     processedContentHashes.set(contentHash, now);
   }
   
+  logger.info(`[去重] 新消息已记录: msgId=${msgId}, hash=${contentHash?.slice(0, 30)}`);
   return false;
 }
 
@@ -449,6 +451,13 @@ async function processInboundMessage(
     cfg: config,
     dispatcherOptions: {
       deliver: async (payload: any) => {
+        // 记录 deliver 被调用的情况
+        logger.info("[调试] deliver 被调用", { 
+          hasText: !!(payload.text || payload.body),
+          hasMediaUrl: !!payload.mediaUrl,
+          payloadKeys: Object.keys(payload),
+        });
+        
         try {
           let mediaSent = false;
 
@@ -675,10 +684,10 @@ export async function handleWeComWebhook(
 
   // POST 请求 - 消息处理
   if (req.method === "POST") {
-    console.log("[WECOM DEBUG] 收到 POST 请求");
+    logger.info("[调试] 收到 POST 请求", { url: req.url });
     
     if (!signature || !timestamp || !nonce) {
-      console.log("[WECOM DEBUG] 缺少必要参数");
+      logger.warn("[调试] 缺少必要参数", { signature: !!signature, timestamp: !!timestamp, nonce: !!nonce });
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Missing required parameters" }));
@@ -686,12 +695,12 @@ export async function handleWeComWebhook(
     }
 
     const body = await WeComAPI.readRequestBody(req);
-    console.log("[WECOM DEBUG] 收到请求体长度:", body.length);
+    logger.info("[调试] 收到请求体", { length: body.length });
     
     const encryptMatch = /<Encrypt><!\[CDATA\[(.*?)\]\]><\/Encrypt>/s.exec(body);
 
     if (!encryptMatch) {
-      console.log("[WECOM DEBUG] 无法匹配加密内容，原始 body:", body.slice(0, 200));
+      logger.warn("[调试] 无法匹配加密内容", { bodyPreview: body.slice(0, 200) });
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid encrypted message format" }));
@@ -699,10 +708,10 @@ export async function handleWeComWebhook(
     }
 
     const encryptedContent = encryptMatch[1];
-    console.log("[WECOM DEBUG] 加密内容长度:", encryptedContent.length);
+    logger.info("[调试] 加密内容", { length: encryptedContent.length });
 
     if (!WeComAPI.validateSignature(accountConfig.token, timestamp, nonce, encryptedContent, signature)) {
-      console.log("[WECOM DEBUG] 签名验证失败");
+      logger.warn("[调试] 签名验证失败");
       logger.warn("签名验证失败");
       res.statusCode = 401;
       res.setHeader("Content-Type", "application/json");
@@ -717,9 +726,9 @@ export async function handleWeComWebhook(
         accountConfig.corpId,
         encryptedContent
       );
-      console.log("[WECOM DEBUG] 解密成功");
+      logger.info("[调试] 解密成功");
     } catch (error) {
-      console.log("[WECOM DEBUG] 解密失败:", error);
+      logger.error("[调试] 解密失败", { error: error instanceof Error ? error.message : String(error) });
       logger.error("解密消息失败", {
         error: error instanceof Error ? error.message : "Unknown",
       });
@@ -732,8 +741,8 @@ export async function handleWeComWebhook(
     const msg = WeComAPI.parseXmlMessage(decryptedXml);
     
     // 调试日志：输出解析后的消息内容
-    console.log("[WECOM DEBUG] 解密后的 XML:", decryptedXml.slice(0, 500));
-    console.log("[WECOM DEBUG] 解析后的消息:", JSON.stringify(msg, null, 2));
+    logger.info("[调试] 解密后的 XML", { xml: decryptedXml.slice(0, 300) });
+    logger.info("[调试] 解析后的消息", { msg });
     
     // 生成消息唯一标识（MsgId 或 事件类型+时间戳+用户）
     const messageId = msg.MsgId || `${msg.MsgType}_${msg.Event || ''}_${msg.CreateTime}_${msg.FromUserName}`;
