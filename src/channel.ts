@@ -23,6 +23,36 @@ export interface WeComAccountConfig {
 const meta = getChatChannelMeta("wecom");
 const DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID;
 
+// 消息去重缓存（防止企业微信重试导致重复处理）
+const processedMsgIds = new Map<string, number>();
+const MSG_ID_CACHE_TTL = 60 * 1000; // 60 秒过期
+const MSG_ID_CACHE_MAX_SIZE = 1000; // 最多缓存 1000 条
+
+/**
+ * 检查消息是否已处理（去重）
+ */
+function isMessageProcessed(msgId: string): boolean {
+  const now = Date.now();
+  
+  // 清理过期的缓存
+  if (processedMsgIds.size > MSG_ID_CACHE_MAX_SIZE / 2) {
+    for (const [id, timestamp] of processedMsgIds) {
+      if (now - timestamp > MSG_ID_CACHE_TTL) {
+        processedMsgIds.delete(id);
+      }
+    }
+  }
+  
+  // 检查是否已存在
+  if (processedMsgIds.has(msgId)) {
+    return true;
+  }
+  
+  // 记录新消息
+  processedMsgIds.set(msgId, now);
+  return false;
+}
+
 /**
  * 解析账户配置
  * 优先级：
@@ -452,13 +482,26 @@ export async function handleWeComWebhook(
     }
 
     const msg = WeComAPI.parseXmlMessage(decryptedXml);
+    
+    // 生成消息唯一标识（MsgId 或 事件类型+时间戳+用户）
+    const messageId = msg.MsgId || `${msg.MsgType}_${msg.Event || ''}_${msg.CreateTime}_${msg.FromUserName}`;
 
     logger.info("收到企业微信消息", {
       type: msg.MsgType,
       from: msg.FromUserName,
       event: msg.Event,
       eventKey: msg.EventKey,
+      msgId: messageId,
     });
+
+    // 消息去重检查（企业微信可能因超时重试）
+    if (isMessageProcessed(messageId)) {
+      logger.info("忽略重复消息", { msgId: messageId });
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain");
+      res.end("success");
+      return true;
+    }
 
     let text = msg.Content || "";
 
@@ -470,13 +513,15 @@ export async function handleWeComWebhook(
     // 忽略空消息和其他事件
     if (!text && msg.MsgType !== "text") {
       res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ok: true }));
+      res.setHeader("Content-Type", "text/plain");
+      res.end("success");
       return true;
     }
 
-    // 立即响应企业微信，避免超时
+    // 立即响应企业微信，避免超时重试
+    // 企业微信要求 5 秒内响应，否则会重试最多 3 次
     res.statusCode = 200;
+    res.setHeader("Content-Type", "text/plain");
     res.end("success");
 
     // 异步处理消息
