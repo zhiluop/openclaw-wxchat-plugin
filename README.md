@@ -1,6 +1,24 @@
 # OpenClaw 企业微信插件
 
-为 OpenClaw 企业微信插件提供消息渠道支持，支持文本、图片等多种消息类型。
+> **本插件基于原有的企业微信插件重构，完整适配 OpenClaw 新的 Plugin SDK 接口**
+
+**原插件仓库**: https://github.com/zhiluop/wxchat
+
+本插件为 OpenClaw 提供企业微信消息渠道支持，支持文本、图片、视频、语音、文件等多种消息类型。
+
+## 重构说明
+
+本插件从原有企业微信插件迁移而来，主要变更：
+
+| 方面 | 原插件 | 新插件（OpenClaw） |
+|------|---------|-------------------|
+| 插件注册 | 原有方式 | 使用 `api.registerChannel()` |
+| HTTP Handler | 原有方式 | 使用 `api.registerHttpHandler()` |
+| 配置读取 | 自定义配置 | `configSchema` + `resolveAccount` API |
+| 消息处理 | 原有实现 | `runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher` |
+| 会话管理 | 自定义实现 | `runtime.channel.session` APIs |
+| 路由系统 | 原有实现 | `runtime.channel.routing.resolveAgentRoute` |
+| CLI 命令 | 原有方式 | `api.registerCli()` |
 
 ## 功能特性
 
