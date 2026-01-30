@@ -1,7 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { wecomPlugin, handleWeComWebhook } from "./src/channel.js";
-import { setWeComRuntime, getWeComConfig } from "./src/runtime.js";
+import { setWeComRuntime, getWeComConfig, getWeComPluginConfig } from "./src/runtime.js";
 import * as WeComAPI from "./src/wecom-api.js";
 import type { WeComAccountConfig } from "./src/channel.js";
 
@@ -67,12 +66,13 @@ const plugin = {
   id: "wecom",
   name: "企业微信 Channel",
   description: "企业微信消息渠道插件",
-  configSchema: emptyPluginConfigSchema(),
+  // 使用 openclaw.plugin.json 中定义的 configSchema
   register(api: OpenClawPluginApi) {
     const logger = api.logger;
 
-    // 设置运行时
-    setWeComRuntime(api.runtime, api.config, logger);
+    // 设置运行时，传递插件专属配置
+    // api.pluginConfig 是 plugins.entries.wecom.config 的内容
+    setWeComRuntime(api.runtime, api.config, logger, api.pluginConfig);
 
     // 注册渠道插件
     api.registerChannel({ plugin: wecomPlugin });
@@ -106,11 +106,13 @@ const plugin = {
           .option("-a, --account <id>", "账户ID", "default")
           .action(async (options: { account: string }) => {
             const cfg = getWeComConfig();
+            const pluginCfg = getWeComPluginConfig();
             const accountConfig = wecomPlugin.config.resolveAccount(cfg, options.account);
             console.log("企业微信渠道状态:");
             console.log(`  账户ID: ${accountConfig.accountId}`);
             console.log(`  已启用: ${accountConfig.enabled}`);
             console.log(`  已配置: ${Boolean(accountConfig.corpId)}`);
+            console.log(`  配置来源: ${pluginCfg?.corpId ? 'plugins.entries.wecom.config' : (cfg.channels?.wecom?.corpId ? 'channels.wecom' : '未配置')}`);
             if (accountConfig.corpId) {
               try {
                 const token = await WeComAPI.getAccessToken(accountConfig);

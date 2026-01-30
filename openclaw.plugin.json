@@ -36,7 +36,7 @@
         "description": "在应用 -> 接收消息 -> API接收中设置，43位字符"
       }
     },
-    "required": ["corpId", "corpSecret", "agentId", "token", "encodingAesKey"]
+    "required": []
   },
   "uiHints": {
     "corpId": {

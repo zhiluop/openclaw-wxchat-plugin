@@ -6,7 +6,7 @@ import {
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import { getWeComRuntime, getWeComConfig, getWeComLogger } from "./runtime.js";
+import { getWeComRuntime, getWeComConfig, getWeComLogger, getWeComPluginConfig } from "./runtime.js";
 import * as WeComAPI from "./wecom-api.js";
 
 // 企业微信账户配置
@@ -25,6 +25,10 @@ const DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID;
 
 /**
  * 解析账户配置
+ * 优先级：
+ * 1. plugins.entries.wecom.config（插件专属配置）
+ * 2. channels.wecom（渠道配置）
+ * 3. channels.wecom.accounts[id]（多账户模式）
  */
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -32,7 +36,21 @@ function resolveAccountConfig(
 ): WeComAccountConfig {
   const id = accountId ?? DEFAULT_ACCOUNT;
 
-  // 从 channels.wecom 读取（新配置格式）
+  // 优先从插件配置读取 (plugins.entries.wecom.config)
+  const pluginConfig = getWeComPluginConfig();
+  if (pluginConfig && pluginConfig.corpId) {
+    return {
+      accountId: id,
+      enabled: pluginConfig.enabled ?? true,
+      corpId: pluginConfig.corpId,
+      corpSecret: pluginConfig.corpSecret,
+      agentId: pluginConfig.agentId,
+      token: pluginConfig.token,
+      encodingAesKey: pluginConfig.encodingAesKey,
+    };
+  }
+
+  // 从 channels.wecom 读取（渠道配置格式）
   const channelConfig = cfg.channels?.wecom;
   if (channelConfig && channelConfig.corpId) {
     return {

@@ -96,7 +96,25 @@
 
 ### 2. 配置 OpenClaw
 
+支持两种配置方式（任选其一）：
+
+#### 方式一：插件配置（推荐）
+
 在 OpenClaw 配置文件中添加：
+
+```yaml
+plugins:
+  entries:
+    wecom:
+      config:
+        corpId: "ww1234567890abcdef"
+        corpSecret: "your-corp-secret-here"
+        agentId: "1000002"
+        token: "your-webhook-token"
+        encodingAesKey: "your-43-char-encoding-aes-key-12345678901234567"
+```
+
+#### 方式二：渠道配置
 
 ```yaml
 channels:
@@ -108,6 +126,8 @@ channels:
     token: "your-webhook-token"
     encodingAesKey: "your-43-char-encoding-aes-key-12345678901234567"
 ```
+
+> **注意**：插件配置（方式一）优先级高于渠道配置（方式二）
 
 ### 3. 验证配置
 
@@ -123,6 +143,7 @@ openclaw wecom status
   账户ID: default
   已启用: true
   已配置: true
+  配置来源: plugins.entries.wecom.config
   连接状态: 正常 (Token已获取)
 ```
 

@@ -2,7 +2,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 
 // 运行时存储
 let pluginRuntime: PluginRuntime | null = null;
-let pluginConfig: any = null;
+let openclawConfig: any = null;  // OpenClaw 全局配置
+let wecomPluginConfig: any = null;  // 插件专属配置 (plugins.entries.wecom.config)
 let pluginLogger: any = null;
 
 /**
@@ -11,10 +12,12 @@ let pluginLogger: any = null;
 export function setWeComRuntime(
   runtime: PluginRuntime,
   config: any,
-  logger: any
+  logger: any,
+  pluginSpecificConfig?: any
 ): void {
   pluginRuntime = runtime;
-  pluginConfig = config;
+  openclawConfig = config;
+  wecomPluginConfig = pluginSpecificConfig;
   pluginLogger = logger;
 }
 
@@ -29,10 +32,17 @@ export function getWeComRuntime(): PluginRuntime {
 }
 
 /**
- * 获取插件配置
+ * 获取 OpenClaw 全局配置
  */
 export function getWeComConfig(): any {
-  return pluginConfig;
+  return openclawConfig;
+}
+
+/**
+ * 获取插件专属配置 (plugins.entries.wecom.config)
+ */
+export function getWeComPluginConfig(): any {
+  return wecomPluginConfig;
 }
 
 /**
