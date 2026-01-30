@@ -286,3 +286,201 @@ export async function sendWeComMessage(
     throw new Error(`发送消息失败: ${result.errcode} ${result.errmsg}`);
   }
 }
+
+/**
+ * 发送文件消息
+ */
+export async function sendWeComFile(
+  config: WeComAccountConfig,
+  toUser: string,
+  mediaId: string
+): Promise<void> {
+  const accessToken = await getAccessToken(config);
+  const url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${accessToken}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      touser: toUser,
+      msgtype: "file",
+      agentid: parseInt(config.agentId, 10),
+      file: {
+        media_id: mediaId,
+      },
+    }),
+  });
+
+  const result = (await response.json()) as { errcode: number; errmsg: string };
+
+  if (result.errcode !== 0) {
+    throw new Error(`发送文件失败: ${result.errcode} ${result.errmsg}`);
+  }
+}
+
+/**
+ * 发送语音消息
+ */
+export async function sendWeComVoice(
+  config: WeComAccountConfig,
+  toUser: string,
+  mediaId: string
+): Promise<void> {
+  const accessToken = await getAccessToken(config);
+  const url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${accessToken}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      touser: toUser,
+      msgtype: "voice",
+      agentid: parseInt(config.agentId, 10),
+      voice: {
+        media_id: mediaId,
+      },
+    }),
+  });
+
+  const result = (await response.json()) as { errcode: number; errmsg: string };
+
+  if (result.errcode !== 0) {
+    throw new Error(`发送语音失败: ${result.errcode} ${result.errmsg}`);
+  }
+}
+
+/**
+ * 发送视频消息
+ */
+export async function sendWeComVideo(
+  config: WeComAccountConfig,
+  toUser: string,
+  mediaId: string,
+  title?: string,
+  description?: string
+): Promise<void> {
+  const accessToken = await getAccessToken(config);
+  const url = `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${accessToken}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      touser: toUser,
+      msgtype: "video",
+      agentid: parseInt(config.agentId, 10),
+      video: {
+        media_id: mediaId,
+        title: title || "",
+        description: description || "",
+      },
+    }),
+  });
+
+  const result = (await response.json()) as { errcode: number; errmsg: string };
+
+  if (result.errcode !== 0) {
+    throw new Error(`发送视频失败: ${result.errcode} ${result.errmsg}`);
+  }
+}
+
+/**
+ * 下载临时素材
+ * 返回保存的文件路径
+ */
+export async function downloadMedia(
+  config: WeComAccountConfig,
+  mediaId: string,
+  saveDir: string,
+  filename?: string
+): Promise<string> {
+  const accessToken = await getAccessToken(config);
+  const url = `https://qyapi.weixin.qq.com/cgi-bin/media/get?access_token=${accessToken}&media_id=${mediaId}`;
+
+  const response = await fetch(url);
+
+  // 检查是否返回错误 JSON
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const result = (await response.json()) as { errcode: number; errmsg: string };
+    throw new Error(`下载素材失败: ${result.errcode} ${result.errmsg}`);
+  }
+
+  // 从 Content-Disposition 获取文件名
+  const disposition = response.headers.get("content-disposition") || "";
+  let finalFilename = filename;
+  if (!finalFilename) {
+    const filenameMatch = disposition.match(/filename="?([^";\n]+)"?/i);
+    if (filenameMatch) {
+      finalFilename = filenameMatch[1];
+    } else {
+      // 根据 Content-Type 猜测扩展名
+      const extMap: Record<string, string> = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "audio/amr": ".amr",
+        "video/mp4": ".mp4",
+        "application/octet-stream": ".bin",
+      };
+      const ext = extMap[contentType] || ".bin";
+      finalFilename = `${mediaId}${ext}`;
+    }
+  }
+
+  // 动态导入 fs 和 path
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+
+  // 确保目录存在
+  if (!fs.existsSync(saveDir)) {
+    fs.mkdirSync(saveDir, { recursive: true });
+  }
+
+  const filePath = path.join(saveDir, finalFilename);
+
+  // 获取文件内容并保存
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  fs.writeFileSync(filePath, buffer);
+
+  return filePath;
+}
+
+/**
+ * 获取高清语音素材（将 AMR 转为 MP3，需要开通高级功能）
+ */
+export async function downloadVoiceHD(
+  config: WeComAccountConfig,
+  mediaId: string,
+  saveDir: string,
+  filename?: string
+): Promise<string> {
+  const accessToken = await getAccessToken(config);
+  const url = `https://qyapi.weixin.qq.com/cgi-bin/media/get/jssdk?access_token=${accessToken}&media_id=${mediaId}`;
+
+  const response = await fetch(url);
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const result = (await response.json()) as { errcode: number; errmsg: string };
+    throw new Error(`下载高清语音失败: ${result.errcode} ${result.errmsg}`);
+  }
+
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+
+  if (!fs.existsSync(saveDir)) {
+    fs.mkdirSync(saveDir, { recursive: true });
+  }
+
+  const finalFilename = filename || `${mediaId}.mp3`;
+  const filePath = path.join(saveDir, finalFilename);
+
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  fs.writeFileSync(filePath, buffer);
+
+  return filePath;
+}

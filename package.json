@@ -4,7 +4,16 @@
   "description": "企业微信消息渠道插件 for OpenClaw",
   "type": "module",
   "main": "index.ts",
-  "keywords": ["openclaw", "wecom", "wechat-work", "channel", "enterprise-wechat"],
+  "keywords": [
+    "openclaw",
+    "wecom",
+    "wechat-work",
+    "channel",
+    "enterprise-wechat"
+  ],
   "author": "deelii",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
 }

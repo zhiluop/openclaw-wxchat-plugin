@@ -8,6 +8,8 @@ import {
 } from "openclaw/plugin-sdk";
 import { getWeComRuntime, getWeComConfig, getWeComLogger, getWeComPluginConfig } from "./runtime.js";
 import * as WeComAPI from "./wecom-api.js";
+import * as path from "node:path";
+import * as os from "node:os";
 
 // 企业微信账户配置
 export interface WeComAccountConfig {
@@ -51,6 +53,133 @@ function isMessageProcessed(msgId: string): boolean {
   // 记录新消息
   processedMsgIds.set(msgId, now);
   return false;
+}
+
+// 媒体文件保存目录
+function getMediaSaveDir(): string {
+  // 使用临时目录下的 wecom-media 子目录
+  const tempDir = os.tmpdir();
+  return path.join(tempDir, "wecom-media");
+}
+
+// 支持的媒体消息类型
+type MediaMsgType = "image" | "voice" | "video" | "file";
+
+/**
+ * 处理媒体消息（图片、语音、视频、文件）
+ * 下载媒体文件并返回处理后的文本描述
+ */
+async function processMediaMessage(
+  msg: Record<string, string>,
+  msgType: MediaMsgType,
+  accountConfig: WeComAccountConfig
+): Promise<{ text: string; filePath?: string }> {
+  const logger = getWeComLogger();
+  const mediaId = msg.MediaId;
+  
+  if (!mediaId) {
+    logger.warn("媒体消息缺少 MediaId", { msgType });
+    return { text: `[${msgType}] (无法获取媒体文件)` };
+  }
+
+  try {
+    const saveDir = getMediaSaveDir();
+    let filePath: string;
+    let description: string;
+
+    switch (msgType) {
+      case "image": {
+        // 图片消息：有 PicUrl（图片链接）和 MediaId
+        const picUrl = msg.PicUrl;
+        filePath = await WeComAPI.downloadMedia(accountConfig, mediaId, saveDir);
+        description = `[图片] ${filePath}`;
+        if (picUrl) {
+          description += `\n图片链接: ${picUrl}`;
+        }
+        break;
+      }
+      case "voice": {
+        // 语音消息：有 Format（语音格式，如 amr）
+        const format = msg.Format || "amr";
+        filePath = await WeComAPI.downloadMedia(accountConfig, mediaId, saveDir, `${mediaId}.${format}`);
+        description = `[语音] ${filePath} (格式: ${format})`;
+        break;
+      }
+      case "video": {
+        // 视频消息：有 ThumbMediaId（缩略图媒体ID）
+        filePath = await WeComAPI.downloadMedia(accountConfig, mediaId, saveDir, `${mediaId}.mp4`);
+        description = `[视频] ${filePath}`;
+        // 可选：下载缩略图
+        if (msg.ThumbMediaId) {
+          try {
+            const thumbPath = await WeComAPI.downloadMedia(accountConfig, msg.ThumbMediaId, saveDir, `${mediaId}_thumb.jpg`);
+            description += `\n缩略图: ${thumbPath}`;
+          } catch (e) {
+            // 缩略图下载失败不影响主流程
+          }
+        }
+        break;
+      }
+      case "file": {
+        // 文件消息：有 FileName（文件名）
+        const fileName = msg.FileName || `${mediaId}.bin`;
+        filePath = await WeComAPI.downloadMedia(accountConfig, mediaId, saveDir, fileName);
+        description = `[文件] ${filePath}`;
+        break;
+      }
+      default:
+        return { text: `[${msgType}] (不支持的媒体类型)` };
+    }
+
+    logger.info("媒体文件已下载", { msgType, mediaId, filePath });
+    return { text: description, filePath };
+  } catch (error) {
+    logger.error("下载媒体文件失败", {
+      msgType,
+      mediaId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { text: `[${msgType}] (下载失败: ${error instanceof Error ? error.message : "未知错误"})` };
+  }
+}
+
+/**
+ * 处理位置消息
+ */
+function processLocationMessage(msg: Record<string, string>): string {
+  const latitude = msg.Location_X || msg.Latitude;
+  const longitude = msg.Location_Y || msg.Longitude;
+  const scale = msg.Scale;
+  const label = msg.Label;
+  
+  let text = `[位置]`;
+  if (label) {
+    text += ` ${label}`;
+  }
+  text += `\n坐标: ${latitude}, ${longitude}`;
+  if (scale) {
+    text += ` (缩放级别: ${scale})`;
+  }
+  return text;
+}
+
+/**
+ * 处理链接消息
+ */
+function processLinkMessage(msg: Record<string, string>): string {
+  const title = msg.Title || "无标题";
+  const description = msg.Description || "";
+  const url = msg.Url || "";
+  const picUrl = msg.PicUrl || "";
+  
+  let text = `[链接] ${title}`;
+  if (description) {
+    text += `\n${description}`;
+  }
+  if (url) {
+    text += `\n链接: ${url}`;
+  }
+  return text;
 }
 
 /**
@@ -178,7 +307,8 @@ async function createMenu(config: WeComAccountConfig): Promise<void> {
 async function processInboundMessage(
   msg: Record<string, string>,
   text: string,
-  accountConfig: WeComAccountConfig
+  accountConfig: WeComAccountConfig,
+  mediaFilePath?: string
 ): Promise<void> {
   const runtime = getWeComRuntime();
   const config = getWeComConfig();
@@ -188,7 +318,7 @@ async function processInboundMessage(
   const messageId = msg.MsgId || `${Date.now()}`;
   const timestamp = parseInt(msg.CreateTime || "0", 10) * 1000;
 
-  logger.info("处理企业微信消息", { senderId, text, messageId });
+  logger.info("处理企业微信消息", { senderId, text, messageId, mediaFilePath });
 
   // 解析路由
   const route = runtime.channel.routing.resolveAgentRoute({
@@ -212,16 +342,23 @@ async function processInboundMessage(
     sessionKey: route.sessionKey,
   });
 
+  // 如果有媒体文件，在消息体中添加附件信息
+  let bodyText = text;
+  if (mediaFilePath) {
+    // 附件信息会被 AI 识别处理
+    bodyText = text;
+  }
+
   const body = runtime.channel.reply.formatAgentEnvelope({
     channel: "WeCom",
     from: senderId,
     timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: text,
+    body: bodyText,
   });
 
-  // 构建上下文
+  // 构建上下文，包含媒体附件信息
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
     RawBody: text,
@@ -240,6 +377,8 @@ async function processInboundMessage(
     MessageSid: messageId,
     OriginatingChannel: "wecom",
     OriginatingTo: `wecom:${senderId}`,
+    // 添加媒体附件信息（如果有）
+    ...(mediaFilePath ? { MediaAttachment: mediaFilePath } : {}),
   });
 
   // 记录会话
@@ -269,74 +408,131 @@ async function processInboundMessage(
     dispatcherOptions: {
       deliver: async (payload: any) => {
         try {
-          let imageSent = false;
+          let mediaSent = false;
 
-          // 处理图片 - 优先使用 mediaUrl
-          if (payload.mediaUrl) {
-            const imagePath = payload.mediaUrl;
-            if (fs.existsSync(imagePath)) {
-              try {
-                const mediaId = await WeComAPI.uploadMedia(accountConfig, imagePath, "image");
-                await WeComAPI.sendWeComImage(accountConfig, senderId, mediaId);
-                logger.info("已发送图片到企业微信", { to: senderId, path: imagePath });
-                imageSent = true;
-              } catch (err) {
-                console.error("[WECOM ERROR] Failed to send mediaUrl image:", err);
-              }
+          // 辅助函数：根据文件扩展名判断媒体类型
+          const getMediaType = (filePath: string): "image" | "voice" | "video" | "file" => {
+            const ext = filePath.toLowerCase().split(".").pop() || "";
+            if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext)) {
+              return "image";
             }
+            if (["amr", "mp3", "wav", "ogg", "m4a"].includes(ext)) {
+              return "voice";
+            }
+            if (["mp4", "mov", "avi", "wmv", "mkv", "flv"].includes(ext)) {
+              return "video";
+            }
+            return "file";
+          };
+
+          // 辅助函数：发送媒体文件
+          const sendMediaFile = async (filePath: string): Promise<boolean> => {
+            if (!fs.existsSync(filePath)) {
+              logger.warn("媒体文件不存在", { path: filePath });
+              return false;
+            }
+
+            const mediaType = getMediaType(filePath);
+            try {
+              // 语音只支持 AMR 格式上传，其他格式作为文件发送
+              const uploadType = mediaType === "voice" && !filePath.toLowerCase().endsWith(".amr")
+                ? "file"
+                : mediaType;
+
+              const mediaId = await WeComAPI.uploadMedia(accountConfig, filePath, uploadType);
+
+              switch (uploadType) {
+                case "image":
+                  await WeComAPI.sendWeComImage(accountConfig, senderId, mediaId);
+                  logger.info("已发送图片到企业微信", { to: senderId, path: filePath });
+                  break;
+                case "voice":
+                  await WeComAPI.sendWeComVoice(accountConfig, senderId, mediaId);
+                  logger.info("已发送语音到企业微信", { to: senderId, path: filePath });
+                  break;
+                case "video":
+                  await WeComAPI.sendWeComVideo(accountConfig, senderId, mediaId);
+                  logger.info("已发送视频到企业微信", { to: senderId, path: filePath });
+                  break;
+                case "file":
+                default:
+                  await WeComAPI.sendWeComFile(accountConfig, senderId, mediaId);
+                  logger.info("已发送文件到企业微信", { to: senderId, path: filePath });
+                  break;
+              }
+              return true;
+            } catch (err) {
+              console.error(`[WECOM ERROR] Failed to send ${mediaType}:`, err);
+              logger.error(`发送${mediaType}失败`, { path: filePath, error: String(err) });
+              return false;
+            }
+          };
+
+          // 处理单个媒体文件 - mediaUrl
+          if (payload.mediaUrl) {
+            mediaSent = await sendMediaFile(payload.mediaUrl);
           }
 
-          // 处理多个图片 - mediaUrls 数组
+          // 处理多个媒体文件 - mediaUrls 数组
           if (payload.mediaUrls && Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0) {
-            for (const imagePath of payload.mediaUrls) {
-              if (fs.existsSync(imagePath)) {
-                try {
-                  const mediaId = await WeComAPI.uploadMedia(accountConfig, imagePath, "image");
-                  await WeComAPI.sendWeComImage(accountConfig, senderId, mediaId);
-                  logger.info("已发送图片到企业微信", { to: senderId, path: imagePath });
-                  imageSent = true;
-                } catch (err) {
-                  console.error("[WECOM ERROR] Failed to send mediaUrls image:", err);
-                }
-              }
+            for (const filePath of payload.mediaUrls) {
+              const sent = await sendMediaFile(filePath);
+              if (sent) mediaSent = true;
             }
           }
 
           // 处理旧格式的图片
-          if (!imageSent && payload.image) {
+          if (!mediaSent && payload.image) {
             const imagePath = payload.image.path || payload.image.url;
-            if (imagePath && fs.existsSync(imagePath)) {
-              try {
-                const mediaId = await WeComAPI.uploadMedia(accountConfig, imagePath, "image");
-                await WeComAPI.sendWeComImage(accountConfig, senderId, mediaId);
-                logger.info("已发送图片到企业微信", { to: senderId, path: imagePath });
-                imageSent = true;
-              } catch (err) {
-                console.error("[WECOM ERROR] Failed to send image:", err);
-              }
+            if (imagePath) {
+              mediaSent = await sendMediaFile(imagePath);
             }
           }
 
-          // 检查文本中是否包含图片路径（临时方案）
+          // 处理文件 payload
+          if (payload.file) {
+            const filePath = payload.file.path || payload.file.url;
+            if (filePath) {
+              const sent = await sendMediaFile(filePath);
+              if (sent) mediaSent = true;
+            }
+          }
+
+          // 处理视频 payload
+          if (payload.video) {
+            const videoPath = payload.video.path || payload.video.url;
+            if (videoPath) {
+              const sent = await sendMediaFile(videoPath);
+              if (sent) mediaSent = true;
+            }
+          }
+
+          // 处理语音 payload
+          if (payload.voice || payload.audio) {
+            const voicePath = (payload.voice || payload.audio).path || (payload.voice || payload.audio).url;
+            if (voicePath) {
+              const sent = await sendMediaFile(voicePath);
+              if (sent) mediaSent = true;
+            }
+          }
+
+          // 检查文本中是否包含媒体文件路径（临时方案）
           const replyText = payload.text || payload.body || "";
-          if (!imageSent) {
-            const imagePathMatch = replyText.match(/\/[^\s]+\.(png|jpg|jpeg|gif|webp)/i);
-            if (imagePathMatch) {
-              const imagePath = imagePathMatch[0];
-              if (fs.existsSync(imagePath)) {
-                try {
-                  const mediaId = await WeComAPI.uploadMedia(accountConfig, imagePath, "image");
-                  await WeComAPI.sendWeComImage(accountConfig, senderId, mediaId);
-                  logger.info("已发送图片到企业微信", { to: senderId, path: imagePath });
-                  imageSent = true;
-                  // 发送剩余文本（去掉图片路径）
-                  const textWithoutPath = replyText.replace(imagePathMatch[0], "").trim();
+          if (!mediaSent) {
+            // 匹配常见媒体文件路径
+            const mediaPathMatch = replyText.match(/[\/\\][^\s]+\.(png|jpg|jpeg|gif|webp|bmp|mp4|mov|avi|amr|mp3|wav|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar)/i);
+            if (mediaPathMatch) {
+              const mediaPath = mediaPathMatch[0];
+              if (fs.existsSync(mediaPath)) {
+                const sent = await sendMediaFile(mediaPath);
+                if (sent) {
+                  mediaSent = true;
+                  // 发送剩余文本（去掉文件路径）
+                  const textWithoutPath = replyText.replace(mediaPathMatch[0], "").trim();
                   if (textWithoutPath && !textWithoutPath.match(/无法|失败|错误|缺失|Bug/)) {
                     await WeComAPI.sendWeComMessage(accountConfig, senderId, textWithoutPath);
                   }
                   return;
-                } catch (err) {
-                  console.error("[WECOM ERROR] Failed to send image from text:", err);
                 }
               }
             }
@@ -344,13 +540,13 @@ async function processInboundMessage(
 
           // 处理文本 - 智能过滤错误提示
           if (replyText) {
-            // 如果图片已发送，检查文本是否是错误提示
-            if (imageSent) {
+            // 如果媒体已发送，检查文本是否是错误提示
+            if (mediaSent) {
               const isErrorMessage = /^(抱歉|很抱歉|非常抱歉|无法|失败|错误)/.test(replyText.trim());
               const isConfigError = /corpId|配置.*缺失|配置.*不完整|Bug/.test(replyText);
               if (isErrorMessage || isConfigError) {
-                console.log("[WECOM DEBUG] Image sent successfully, skipping error message text");
-                logger.info("图片已发送，跳过错误提示文本");
+                console.log("[WECOM DEBUG] Media sent successfully, skipping error message text");
+                logger.info("媒体已发送，跳过错误提示文本");
                 return;
               }
             }
@@ -503,15 +699,78 @@ export async function handleWeComWebhook(
       return true;
     }
 
-    let text = msg.Content || "";
+    let text = "";
+    let mediaFilePath: string | undefined;
+    const msgType = msg.MsgType;
 
-    // 处理菜单点击事件
-    if (msg.MsgType === "event" && msg.Event === "click") {
-      text = msg.EventKey || "";
+    // 根据消息类型处理
+    switch (msgType) {
+      case "text":
+        // 文本消息
+        text = msg.Content || "";
+        break;
+
+      case "image":
+      case "voice":
+      case "video":
+      case "file": {
+        // 媒体消息：下载并转换为文本描述
+        const mediaResult = await processMediaMessage(msg, msgType as MediaMsgType, accountConfig);
+        text = mediaResult.text;
+        mediaFilePath = mediaResult.filePath;
+        break;
+      }
+
+      case "location":
+        // 位置消息
+        text = processLocationMessage(msg);
+        break;
+
+      case "link":
+        // 链接消息
+        text = processLinkMessage(msg);
+        break;
+
+      case "event":
+        // 事件消息
+        if (msg.Event === "click") {
+          // 菜单点击事件
+          text = msg.EventKey || "";
+        } else if (msg.Event === "subscribe") {
+          // 关注事件
+          text = "/help";
+          logger.info("用户关注", { user: msg.FromUserName });
+        } else if (msg.Event === "unsubscribe") {
+          // 取消关注事件
+          logger.info("用户取消关注", { user: msg.FromUserName });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("success");
+          return true;
+        } else if (msg.Event === "location") {
+          // 上报地理位置事件
+          text = `[位置上报] 纬度: ${msg.Latitude}, 经度: ${msg.Longitude}, 精度: ${msg.Precision}`;
+        } else {
+          // 其他事件，忽略
+          logger.info("忽略事件", { event: msg.Event });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("success");
+          return true;
+        }
+        break;
+
+      default:
+        // 未知消息类型
+        logger.warn("未知消息类型", { msgType });
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain");
+        res.end("success");
+        return true;
     }
 
-    // 忽略空消息和其他事件
-    if (!text && msg.MsgType !== "text") {
+    // 忽略空消息
+    if (!text) {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/plain");
       res.end("success");
@@ -524,8 +783,8 @@ export async function handleWeComWebhook(
     res.setHeader("Content-Type", "text/plain");
     res.end("success");
 
-    // 异步处理消息
-    processInboundMessage(msg, text, accountConfig).catch((err) => {
+    // 异步处理消息（传递媒体文件路径）
+    processInboundMessage(msg, text, accountConfig, mediaFilePath).catch((err) => {
       logger.error("处理消息失败", {
         error: err instanceof Error ? err.message : String(err),
       });
