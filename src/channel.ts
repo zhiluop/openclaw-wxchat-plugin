@@ -26,17 +26,26 @@ const meta = getChatChannelMeta("wecom");
 const DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID;
 
 // 消息去重缓存（防止企业微信重试导致重复处理）
+// 使用两层去重：MsgId 去重 + 内容哈希去重
 const processedMsgIds = new Map<string, number>();
-const MSG_ID_CACHE_TTL = 60 * 1000; // 60 秒过期
-const MSG_ID_CACHE_MAX_SIZE = 1000; // 最多缓存 1000 条
+const processedContentHashes = new Map<string, number>();
+const MSG_ID_CACHE_TTL = 300 * 1000; // 5 分钟过期（增加到 5 分钟）
+const MSG_ID_CACHE_MAX_SIZE = 2000; // 最多缓存 2000 条
 
 /**
- * 检查消息是否已处理（去重）
+ * 生成内容哈希（用于二次去重）
  */
-function isMessageProcessed(msgId: string): boolean {
+function generateContentHash(fromUser: string, msgType: string, content: string, createTime: string): string {
+  return `${fromUser}_${msgType}_${content.slice(0, 50)}_${createTime}`;
+}
+
+/**
+ * 清理过期缓存
+ */
+function cleanupExpiredCache(): void {
   const now = Date.now();
   
-  // 清理过期的缓存
+  // 清理 MsgId 缓存
   if (processedMsgIds.size > MSG_ID_CACHE_MAX_SIZE / 2) {
     for (const [id, timestamp] of processedMsgIds) {
       if (now - timestamp > MSG_ID_CACHE_TTL) {
@@ -45,13 +54,46 @@ function isMessageProcessed(msgId: string): boolean {
     }
   }
   
-  // 检查是否已存在
-  if (processedMsgIds.has(msgId)) {
+  // 清理内容哈希缓存
+  if (processedContentHashes.size > MSG_ID_CACHE_MAX_SIZE / 2) {
+    for (const [hash, timestamp] of processedContentHashes) {
+      if (now - timestamp > MSG_ID_CACHE_TTL) {
+        processedContentHashes.delete(hash);
+      }
+    }
+  }
+}
+
+/**
+ * 检查消息是否已处理（去重）
+ * 返回 true 表示消息已处理过（应该忽略）
+ */
+function isMessageProcessed(msgId: string, contentHash?: string): boolean {
+  const now = Date.now();
+  
+  // 清理过期缓存
+  cleanupExpiredCache();
+  
+  // 第一层：MsgId 去重
+  if (msgId && processedMsgIds.has(msgId)) {
+    console.log(`[WECOM DEDUP] 检测到重复消息 (MsgId): ${msgId}`);
+    return true;
+  }
+  
+  // 第二层：内容哈希去重（防止 MsgId 不同但内容相同的重复）
+  if (contentHash && processedContentHashes.has(contentHash)) {
+    console.log(`[WECOM DEDUP] 检测到重复消息 (ContentHash): ${contentHash}`);
     return true;
   }
   
   // 记录新消息
-  processedMsgIds.set(msgId, now);
+  if (msgId) {
+    processedMsgIds.set(msgId, now);
+  }
+  if (contentHash) {
+    processedContentHashes.set(contentHash, now);
+  }
+  
   return false;
 }
 
@@ -633,7 +675,10 @@ export async function handleWeComWebhook(
 
   // POST 请求 - 消息处理
   if (req.method === "POST") {
+    console.log("[WECOM DEBUG] 收到 POST 请求");
+    
     if (!signature || !timestamp || !nonce) {
+      console.log("[WECOM DEBUG] 缺少必要参数");
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Missing required parameters" }));
@@ -641,9 +686,12 @@ export async function handleWeComWebhook(
     }
 
     const body = await WeComAPI.readRequestBody(req);
+    console.log("[WECOM DEBUG] 收到请求体长度:", body.length);
+    
     const encryptMatch = /<Encrypt><!\[CDATA\[(.*?)\]\]><\/Encrypt>/s.exec(body);
 
     if (!encryptMatch) {
+      console.log("[WECOM DEBUG] 无法匹配加密内容，原始 body:", body.slice(0, 200));
       res.statusCode = 400;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Invalid encrypted message format" }));
@@ -651,8 +699,10 @@ export async function handleWeComWebhook(
     }
 
     const encryptedContent = encryptMatch[1];
+    console.log("[WECOM DEBUG] 加密内容长度:", encryptedContent.length);
 
     if (!WeComAPI.validateSignature(accountConfig.token, timestamp, nonce, encryptedContent, signature)) {
+      console.log("[WECOM DEBUG] 签名验证失败");
       logger.warn("签名验证失败");
       res.statusCode = 401;
       res.setHeader("Content-Type", "application/json");
@@ -667,7 +717,9 @@ export async function handleWeComWebhook(
         accountConfig.corpId,
         encryptedContent
       );
+      console.log("[WECOM DEBUG] 解密成功");
     } catch (error) {
+      console.log("[WECOM DEBUG] 解密失败:", error);
       logger.error("解密消息失败", {
         error: error instanceof Error ? error.message : "Unknown",
       });
@@ -679,8 +731,20 @@ export async function handleWeComWebhook(
 
     const msg = WeComAPI.parseXmlMessage(decryptedXml);
     
+    // 调试日志：输出解析后的消息内容
+    console.log("[WECOM DEBUG] 解密后的 XML:", decryptedXml.slice(0, 500));
+    console.log("[WECOM DEBUG] 解析后的消息:", JSON.stringify(msg, null, 2));
+    
     // 生成消息唯一标识（MsgId 或 事件类型+时间戳+用户）
     const messageId = msg.MsgId || `${msg.MsgType}_${msg.Event || ''}_${msg.CreateTime}_${msg.FromUserName}`;
+    
+    // 生成内容哈希（用于二次去重）
+    const contentHash = generateContentHash(
+      msg.FromUserName || "",
+      msg.MsgType || "",
+      msg.Content || msg.MediaId || msg.EventKey || "",
+      msg.CreateTime || ""
+    );
 
     logger.info("收到企业微信消息", {
       type: msg.MsgType,
@@ -688,11 +752,13 @@ export async function handleWeComWebhook(
       event: msg.Event,
       eventKey: msg.EventKey,
       msgId: messageId,
+      contentHash: contentHash.slice(0, 50),
     });
 
     // 消息去重检查（企业微信可能因超时重试）
-    if (isMessageProcessed(messageId)) {
-      logger.info("忽略重复消息", { msgId: messageId });
+    // 使用双重去重：MsgId + 内容哈希
+    if (isMessageProcessed(messageId, contentHash)) {
+      logger.info("忽略重复消息", { msgId: messageId, contentHash: contentHash.slice(0, 50) });
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/plain");
       res.end("success");
