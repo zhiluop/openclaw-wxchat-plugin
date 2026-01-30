@@ -348,6 +348,9 @@ async function createMenu(config: WeComAccountConfig): Promise<void> {
 /**
  * 处理入站消息
  */
+// 入站消息处理去重（防止同一消息被 processInboundMessage 处理多次）
+const processingMessages = new Set<string>();
+
 async function processInboundMessage(
   msg: Record<string, string>,
   text: string,
@@ -361,6 +364,19 @@ async function processInboundMessage(
   const senderId = msg.FromUserName;
   const messageId = msg.MsgId || `${Date.now()}`;
   const timestamp = parseInt(msg.CreateTime || "0", 10) * 1000;
+  
+  // 处理级别的去重：防止同一消息被并发处理
+  const processingKey = `${messageId}_${msg.CreateTime}`;
+  if (processingMessages.has(processingKey)) {
+    logger.warn("消息正在处理中，跳过重复处理", { messageId, processingKey });
+    return;
+  }
+  processingMessages.add(processingKey);
+  
+  // 5分钟后清理
+  setTimeout(() => {
+    processingMessages.delete(processingKey);
+  }, 300000);
 
   logger.info("处理企业微信消息", { senderId, text, messageId, mediaFilePath });
 
@@ -444,6 +460,9 @@ async function processInboundMessage(
 
   // 动态导入 fs
   const fs = await import("node:fs");
+  
+  // 回复去重：记录已发送的回复内容哈希，防止重复发送
+  const sentReplies = new Set<string>();
 
   // 分发回复
   await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -451,11 +470,22 @@ async function processInboundMessage(
     cfg: config,
     dispatcherOptions: {
       deliver: async (payload: any) => {
+        const replyText = payload.text || payload.body || "";
+        const replyHash = `${senderId}_${replyText.slice(0, 100)}`;
+        
+        // 检查是否已发送过相同内容
+        if (sentReplies.has(replyHash)) {
+          logger.warn("[去重] 跳过重复回复", { to: senderId, textPreview: replyText.slice(0, 50) });
+          return;
+        }
+        sentReplies.add(replyHash);
+        
         // 记录 deliver 被调用的情况
         logger.info("[调试] deliver 被调用", { 
-          hasText: !!(payload.text || payload.body),
+          hasText: !!replyText,
           hasMediaUrl: !!payload.mediaUrl,
           payloadKeys: Object.keys(payload),
+          textPreview: replyText.slice(0, 50),
         });
         
         try {
