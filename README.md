@@ -12,7 +12,7 @@ OpenClaw 企业微信消息渠道插件，支持文本、图片等多种消息�
 
 ```bash
 cd your-openclaw-root/plugins
-git clone git@github.com:zhiluop/wxchat.git wecom
+git clone https://github.com/zhiluop/openclaw-wxchat-plugin.git wecom
 cd wecom
 npm install
 ```
