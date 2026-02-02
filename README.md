@@ -14,49 +14,80 @@
 
 ## 安装
 
-### 方式一：与 OpenClaw 对话安装
+### 快速安装
 
-在 OpenClaw 中直接发送插件仓库链接，bot 会自动安装：
+复制下面这段话发送给 OpenClaw：
 
 ```
-https://github.com/zhiluop/openclaw-wxchat-plugin
+Read https://github.com/zhiluop/openclaw-wecom-plugin/blob/master/README.md and follow instructions to install and configure WeCom plugin for OpenClaw.
 ```
 
-### 方式二：手动克隆安装
+### AI 模型安装指引（供 OpenClaw AI 执行）
+
+#### 1. 安装插件
+
+克隆插件到正确的目录：
+```bash
+git clone https://github.com/zhiluop/openclaw-wecom-plugin.git ~/.openclaw/extensions/wecom
+```
+
+**重要说明**：
+- 插件必须安装在 `~/.openclaw/extensions/wecom` 目录
+- 目录名称 `wecom` 必须与 `openclaw.plugin.json` 中的 `id` 字段一致
+
+#### 2. 安装依赖
 
 ```bash
-# 克隆到插件目录
-cd your-openclaw-root/plugins
-git clone https://github.com/zhiluop/openclaw-wxchat-plugin.git wecom
-cd wecom
+cd ~/.openclaw/extensions/wecom
 npm install
 ```
 
-## 配置
+#### 3. 配置插件
 
-在 OpenClaw 配置文件中添加企业微信配置：
+我需要以下配置参数来设置企业微信插件，请提供：
 
-```yaml
-plugins:
-  entries:
-    wecom:
-      config:
-        corpId: "你的企业ID"
-        corpSecret: "应用Secret"
-        agentId: "应用AgentId"
-        token: "回调Token"
-        encodingAesKey: "回调EncodingAESKey"
+1. **企业ID (corpId)** - 在企业微信管理后台 -> 我的企业 中获取
+2. **应用密钥 (corpSecret)** - 在应用管理 -> 自建应用详情页获取
+3. **应用ID (agentId)** - 在应用管理 -> 自建应用中获取
+4. **回调Token (token)** - 在应用 -> 接收消息 -> API接收中设置
+5. **消息加密密钥 (encodingAesKey)** - 在应用 -> 接收消息 -> API接收中设置（43位字符）
+
+收到配置参数后，我会在 `~/.openclaw/openclaw.json` 中添加以下配置：
+
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "allow": ["wecom"],
+    "entries": {
+      "wecom": {
+        "enabled": true,
+        "config": {
+          "corpId": "YOUR_CORP_ID",
+          "corpSecret": "YOUR_CORP_SECRET",
+          "agentId": "YOUR_AGENT_ID",
+          "token": "YOUR_TOKEN",
+          "encodingAesKey": "YOUR_ENCODING_AES_KEY"
+        }
+      }
+    }
+  }
+}
 ```
 
-## 企业微信配置
+配置完成后，我会自动执行以下命令重启 OpenClaw Gateway 使配置生效：
 
-1. 登录 [企业微信管理后台](https://work.weixin.qq.com/)
-2. 创建自建应用
-3. 在应用设置中配置：
-   - **接收消息 URL**：`https://你的域名/webhooks/wecom`
-   - **Token**：自定义，填入配置
-   - **EncodingAESKey**：随机生成，填入配置
-   - **加密方式**：安全模式
+```bash
+openclaw gateway restart
+```
+
+#### 4. 配置企业微信回调
+
+在企业微信管理后台配置接收消息 URL：
+- **URL**: `https://你的域名/webhooks/wecom`
+- **Token**: 使用上面配置的 token 值
+- **EncodingAESKey**: 使用上面配置的 encodingAesKey 值
+- **加密方式**: 安全模式
 
 ## 应用菜单
 
