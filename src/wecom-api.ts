@@ -113,7 +113,8 @@ export function decryptMessage(
  */
 export function parseXmlMessage(xml: string): Record<string, string> {
   const result: Record<string, string> = {};
-  const regex = /<(\w+)>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))<\/\1>/g;
+  // 修复：使用 [\s\S]*? 来匹配包括换行的任意字符
+  const regex = /<(\w+)>(?:\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*|([^<]*))\s*<\/\1>/g;
   let match;
 
   while ((match = regex.exec(xml)) !== null) {
